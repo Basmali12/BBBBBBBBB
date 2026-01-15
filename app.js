@@ -20,7 +20,7 @@ const db = getDatabase(app);
 
 // --- إعدادات التطبيق ---
 const APP_PIN = "123321";
-const LOCAL_STORAGE_KEY = "car_debt_v2_data"; // تم تغيير الاسم لنسخة جديدة
+const LOCAL_STORAGE_KEY = "car_debt_v3_data"; // مفتاح جديد للنسخة الجديدة
 
 let currentState = {
     customers: [],
@@ -56,7 +56,6 @@ function setupRealtimeListener() {
             currentState = data;
             if (!currentState.customers) currentState.customers = [];
             localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(currentState));
-            console.log("تم التحديث من السحابة");
             updateUI();
         }
     }, (error) => {
@@ -127,7 +126,6 @@ function saveData() {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(currentState));
     if (navigator.onLine) {
         set(ref(db, 'debt_system_data'), currentState)
-            .then(() => console.log("Saved to Cloud"))
             .catch((err) => console.error("Cloud Error", err));
     }
 }
@@ -150,10 +148,10 @@ function addCustomer() {
     const notes = document.getElementById('cust-notes').value;
     
     // جلب العملة المختارة
-    const currency = document.querySelector('input[name="currency"]:checked').value; // IQD or USD
+    const currency = document.querySelector('input[name="currency"]:checked').value; 
 
     if (!name || !phone || isNaN(total) || !car) {
-        alert("يرجى ملء الحقول الإجبارية (الاسم، السيارة، الهاتف، المبلغ)");
+        alert("يرجى ملء الحقول الإجبارية");
         return;
     }
 
@@ -162,7 +160,7 @@ function addCustomer() {
         name: name,
         carName: car,
         whatsapp: phone,
-        currency: currency, // تخزين العملة
+        currency: currency, 
         totalDebt: total,
         paidTotal: paid,
         remaining: total - paid,
@@ -206,7 +204,6 @@ function renderCustomers() {
 
     if(!currentState.customers) currentState.customers = [];
 
-    // الترتيب: الأحدث أولاً
     const sorted = [...currentState.customers].reverse();
     const filtered = sorted.filter(c => c.name.toLowerCase().includes(query) || c.carName.toLowerCase().includes(query));
 
@@ -243,8 +240,6 @@ function loadCustomerDetails(id) {
     currentCustomerViewId = id;
     const container = document.getElementById('details-container');
     const payments = customer.payments || [];
-
-    // دعم العملات القديمة التي لا تملك حقل currency
     const curr = customer.currency || 'IQD';
 
     container.innerHTML = `
@@ -285,7 +280,7 @@ function loadCustomerDetails(id) {
     showPage('details');
 }
 
-// --- قسم التسديد ---
+// --- قسم التسديد والطباعة ---
 function renderPaymentClients() {
     const list = document.getElementById('payment-clients-list');
     const query = document.getElementById('search-payment-client').value.toLowerCase();
@@ -358,8 +353,6 @@ function submitPayment() {
     saveData();
     closePaymentModal();
     showToast("تم التسديد بنجاح 💰");
-    
-    // تحديث القائمة المفتوحة
     renderPaymentClients(); 
 }
 
@@ -373,51 +366,61 @@ function deleteCustomerConfirm() {
     }
 }
 
-// --- التنسيق المالي (يدعم الدولار والدينار) ---
+// --- التنسيق المالي ---
 function formatMoney(amount, currency = 'IQD') {
     if (currency === 'USD') {
-        // دولار: يظهر الرمز $ وكسور عشرية
         return new Intl.NumberFormat('en-US', { 
-            style: 'currency', 
-            currency: 'USD',
-            minimumFractionDigits: 0,
-            maximumFractionDigits: 2
+            style: 'currency', currency: 'USD',
+            minimumFractionDigits: 0, maximumFractionDigits: 2
         }).format(amount);
     } else {
-        // دينار: يظهر د.ع وبدون كسور
         return new Intl.NumberFormat('ar-IQ', { 
-            style: 'currency', 
-            currency: 'IQD', 
-            maximumFractionDigits: 0 
+            style: 'currency', currency: 'IQD', maximumFractionDigits: 0 
         }).format(amount);
     }
 }
 
-// --- الطباعة ---
-function openPrintModal() {
-    if(!currentCustomerViewId) return;
+// --- الطباعة (مربوطة الآن بنافذة التسديد) ---
+function openPrintModalFromPayment() {
+    if(!selectedCustomerIdForPay) return;
+    
+    // نغلق مودال التسديد ونفتح مودال إعدادات الطباعة
+    document.getElementById('payment-form-modal').classList.add('hidden');
     document.getElementById('print-modal').classList.remove('hidden');
+    
     const savedOffice = localStorage.getItem('office_name_pref') || '';
     document.getElementById('print-office-input').value = savedOffice;
 }
 
 function executePrint() {
+    // الطباعة تأخذ بيانات الزبون المحدد في نافذة التسديد
     const officeName = document.getElementById('print-office-input').value;
     const note = document.getElementById('print-note-input').value;
     
     if(officeName) localStorage.setItem('office_name_pref', officeName);
 
-    const c = currentState.customers.find(x => x.id === currentCustomerViewId);
-    const payments = c.payments || [];
-    const curr = c.currency || 'IQD';
+    // نستخدم selectedCustomerIdForPay لأنه يأتي من زر التسديد
+    const c = currentState.customers.find(x => x.id === selectedCustomerIdForPay);
+    
+    // في حال حصل خطأ وكان المتغير فارغ، نحاول استخدام currentCustomerViewId كاحتياط
+    const targetCustomer = c || currentState.customers.find(x => x.id === currentCustomerViewId);
+
+    if (!targetCustomer) {
+        alert("خطأ: لم يتم تحديد زبون للطباعة");
+        return;
+    }
+
+    const payments = targetCustomer.payments || [];
+    const curr = targetCustomer.currency || 'IQD';
 
     const printArea = document.getElementById('print-area');
     
     let tableRows = '';
+    // عرض كل الدفعات بالتفصيل
     [...payments].reverse().forEach(p => {
         tableRows += `
             <tr>
-                <td style="direction:ltr">${formatMoney(p.amount, curr)}</td>
+                <td style="direction:ltr; font-weight:bold">${formatMoney(p.amount, curr)}</td>
                 <td>${p.note}</td>
                 <td style="direction:ltr">${new Date(p.date).toLocaleDateString('en-GB')}</td>
             </tr>
@@ -426,56 +429,61 @@ function executePrint() {
 
     printArea.innerHTML = `
         <div class="invoice-header">
-            <h2>${officeName || 'نظام إدارة الديون'}</h2>
+            <h2>${officeName || 'كشف حساب'}</h2>
             <p>تاريخ الطباعة: ${new Date().toLocaleString('ar-IQ')}</p>
         </div>
 
         <div class="info-grid">
             <div>
-                <strong>الزبون:</strong> ${c.name} <br>
-                <strong>الهاتف:</strong> ${c.whatsapp}
+                <strong>الاسم:</strong> ${targetCustomer.name} <br>
+                <strong>الهاتف:</strong> ${targetCustomer.whatsapp}
             </div>
             <div>
-                <strong>السيارة:</strong> ${c.carName} <br>
-                <strong>رقم القائمة:</strong> #${c.id.toString().slice(-6)}
+                <strong>السيارة:</strong> ${targetCustomer.carName} <br>
+                <strong>رقم الملف:</strong> #${targetCustomer.id.toString().slice(-6)}
             </div>
         </div>
 
         <div class="summary-box">
-            <div style="display:flex; justify-content:space-between">
-                <span>المبلغ الكلي:</span> <strong>${formatMoney(c.totalDebt, curr)}</strong>
+            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                <span>المبلغ الكلي (الدين):</span> <strong>${formatMoney(targetCustomer.totalDebt, curr)}</strong>
             </div>
-            <div style="display:flex; justify-content:space-between; margin-top:5px">
-                <span>الواصل:</span> <strong>${formatMoney(c.paidTotal, curr)}</strong>
+            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                <span>مجموع المسدد (الواصل):</span> <strong>${formatMoney(targetCustomer.paidTotal, curr)}</strong>
             </div>
-            <hr>
-            <div style="display:flex; justify-content:space-between; font-size:1.2em">
-                <span>الباقي:</span> <strong>${formatMoney(c.remaining, curr)}</strong>
+            <hr style="border-top:1px dashed #000; margin:10px 0">
+            <div style="display:flex; justify-content:space-between; font-size:1.3em; font-weight:bold">
+                <span>الباقي بذمته:</span> <span>${formatMoney(targetCustomer.remaining, curr)}</span>
             </div>
         </div>
 
-        <h3>سجل الدفعات</h3>
+        <h3 style="text-align:center; margin-bottom:10px; border-bottom:1px solid #000; display:inline-block">تفاصيل الدفعات</h3>
         <table class="print-table">
             <thead>
                 <tr>
-                    <th>المبلغ</th>
-                    <th>التفاصيل</th>
+                    <th>المبلغ الواصل</th>
+                    <th>ملاحظة / نوع الدفعة</th>
                     <th>التاريخ</th>
                 </tr>
             </thead>
             <tbody>${tableRows}</tbody>
         </table>
 
-        <div style="margin-top:40px; text-align:center; border-top:1px solid #ccc; padding-top:10px;">
+        <div class="print-footer">
             <p>${note}</p>
+            <br>
+            <p><strong>توقيع المستلم</strong> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>توقيع الحسابات</strong></p>
         </div>
     `;
 
     document.getElementById('print-modal').classList.add('hidden');
     window.print();
+    
+    // إعادة فتح مودال التسديد بعد الطباعة (اختياري)
+    // selectedCustomerIdForPay = null; // تفريغ المتغير
 }
 
-// --- أدوات النظام ---
+// --- المزامنة والأدوات ---
 function forceSync() {
     if(navigator.onLine) {
         saveData();
@@ -513,7 +521,7 @@ window.importData = function(input) {
     reader.readAsText(file);
 };
 
-// ربط الدوال بالـ Window
+// ربط الدوال
 window.fingerprintAction = fingerprintAction;
 window.checkPin = checkPin;
 window.logout = logout;
@@ -526,6 +534,6 @@ window.openPaymentModal = openPaymentModal;
 window.closePaymentModal = closePaymentModal;
 window.submitPayment = submitPayment;
 window.deleteCustomerConfirm = deleteCustomerConfirm;
-window.openPrintModal = openPrintModal;
+window.openPrintModalFromPayment = openPrintModalFromPayment; // الدالة الجديدة
 window.executePrint = executePrint;
 window.forceSync = forceSync;
