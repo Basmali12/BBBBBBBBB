@@ -187,6 +187,16 @@
 
     <div id="toast" class="toast">تمت العملية بنجاح</div>
 
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then((reg) => console.log('Service Worker Registered'))
+                    .catch((err) => console.log('SW Registration Failed', err));
+            });
+        }
+    </script>
+
     <script type="module" src="app.js"></script>
 </body>
 </html>
