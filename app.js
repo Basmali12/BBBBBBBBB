@@ -1,6 +1,6 @@
 // --- استيراد مكتبات Firebase ---
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
-import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
+import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-database.js";
 
 // --- إعدادات Firebase ---
 const firebaseConfig = {
@@ -20,63 +20,51 @@ const db = getDatabase(app);
 
 // --- إعدادات التطبيق ---
 const APP_PIN = "123321";
-const LOCAL_STORAGE_KEY = "car_debt_offline_data";
+const LOCAL_STORAGE_KEY = "car_debt_v2_data"; // تم تغيير الاسم لنسخة جديدة
 
 let currentState = {
     customers: [],
     auditLog: []
 };
 let currentCustomerViewId = null;
-let isFirstLoad = true;
+let selectedCustomerIdForPay = null;
 
 // --- عند التشغيل ---
 document.addEventListener('DOMContentLoaded', () => {
-    // 1. تحميل البيانات المخزنة محلياً أولاً (للسرعة)
+    // 1. تحميل محلي
     const localData = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (localData) {
         currentState = JSON.parse(localData);
-        updateUI(); // تحديث الواجهة بالبيانات المحلية فوراً
+        updateUI();
     }
 
-    // 2. تفعيل الاستماع لقاعدة البيانات (للمزامنة الفورية)
+    // 2. ربط Firebase
     setupRealtimeListener();
 
-    // 3. مراقبة حالة الاتصال
+    // 3. حالة الشبكة
     updateOnlineStatus();
     window.addEventListener('online', updateOnlineStatus);
     window.addEventListener('offline', updateOnlineStatus);
 });
 
-// --- وظيفة الاستماع المباشر (سر الحل) ---
+// --- وظيفة الاستماع المباشر ---
 function setupRealtimeListener() {
     const dbRef = ref(db, 'debt_system_data');
-    
-    // onValue تعمل كلما تغيرت البيانات في السيرفر
     onValue(dbRef, (snapshot) => {
         const data = snapshot.val();
-        
-        // إذا وجدت بيانات في السيرفر
         if (data) {
             currentState = data;
-            
-            // التأكد من وجود المصفوفات
             if (!currentState.customers) currentState.customers = [];
-            if (!currentState.auditLog) currentState.auditLog = [];
-            
-            // تحديث التخزين المحلي ليكون مطابقاً للسيرفر
             localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(currentState));
-            
-            // تحديث الشاشة
-            console.log("تم استلام تحديث من السحابة ☁️");
+            console.log("تم التحديث من السحابة");
             updateUI();
         }
     }, (error) => {
-        console.error("خطأ في الاتصال بالقاعدة:", error);
+        console.error("Firebase Error:", error);
     });
 }
 
 function updateUI() {
-    // تحديث الصفحة المفتوحة حالياً فقط
     const activePage = document.querySelector('.page.active');
     if (activePage && activePage.id === 'page-customers') renderCustomers();
     if (activePage && activePage.id === 'page-payments') renderPaymentClients();
@@ -89,22 +77,18 @@ function updateOnlineStatus() {
     
     if (navigator.onLine) {
         statusEl.className = 'status-indicator online';
-        if(syncText) syncText.innerText = "✅ متصل بالإنترنت (المزامنة نشطة)";
-        // عند عودة النت، نرفع النسخة المحلية إذا كانت أحدث (يمكن تطوير هذا الجزء لاحقاً)
-        // حالياً نعتمد على onValue لجلب البيانات
+        if(syncText) syncText.innerText = "✅ متصل بالسحابة (Online)";
     } else {
         statusEl.className = 'status-indicator offline';
-        if(syncText) syncText.innerText = "⚠️ وضع عدم الاتصال (الحفظ محلي فقط)";
+        if(syncText) syncText.innerText = "⚠️ وضع عدم الاتصال (Offline)";
     }
 }
 
-// --- الأمان والواجهة ---
+// --- الأمان ---
 function fingerprintAction() {
     const msg = document.getElementById('fingerprint-msg');
     msg.classList.remove('hidden-msg');
-    setTimeout(() => {
-        msg.classList.add('hidden-msg');
-    }, 3000);
+    setTimeout(() => msg.classList.add('hidden-msg'), 3000);
 }
 
 function checkPin() {
@@ -115,16 +99,14 @@ function checkPin() {
         setTimeout(() => {
             welcome.classList.add('hidden');
             document.getElementById('login-screen').classList.add('hidden');
-            updateUI(); // تحديث الواجهة بعد الدخول
-        }, 1500);
+            updateUI();
+        }, 1200);
     } else {
-        document.getElementById('login-error').innerText = "رمز خطأ!";
+        document.getElementById('login-error').innerText = "رمز خطأ! حاول مجدداً";
     }
 }
 
-function logout() {
-    location.reload();
-}
+function logout() { location.reload(); }
 
 // --- التنقل ---
 function showPage(pageId) {
@@ -136,19 +118,17 @@ function showPage(pageId) {
     const navLink = document.querySelector(`.nav-item[onclick*="'${pageId}'"]`);
     if(navLink) navLink.classList.add('active');
 
-    updateUI();
+    if(pageId === 'customers') renderCustomers();
+    if(pageId === 'payments') renderPaymentClients();
 }
 
 // --- الحفظ ---
 function saveData() {
-    // 1. حفظ محلي
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(currentState));
-    
-    // 2. حفظ سحابي
     if (navigator.onLine) {
         set(ref(db, 'debt_system_data'), currentState)
-            .then(() => console.log("تم الرفع للسحابة"))
-            .catch((err) => console.error("فشل الرفع", err));
+            .then(() => console.log("Saved to Cloud"))
+            .catch((err) => console.error("Cloud Error", err));
     }
 }
 
@@ -159,7 +139,7 @@ function showToast(msg) {
     setTimeout(() => { x.className = x.className.replace("show", ""); }, 3000);
 }
 
-// --- العمليات ---
+// --- إضافة زبون جديد ---
 function addCustomer() {
     const name = document.getElementById('cust-name').value;
     const car = document.getElementById('cust-car').value;
@@ -168,9 +148,12 @@ function addCustomer() {
     const paid = parseFloat(document.getElementById('cust-paid').value) || 0;
     const checker = document.getElementById('cust-checker').value;
     const notes = document.getElementById('cust-notes').value;
+    
+    // جلب العملة المختارة
+    const currency = document.querySelector('input[name="currency"]:checked').value; // IQD or USD
 
     if (!name || !phone || isNaN(total) || !car) {
-        alert("يرجى ملء الحقول الإجبارية");
+        alert("يرجى ملء الحقول الإجبارية (الاسم، السيارة، الهاتف، المبلغ)");
         return;
     }
 
@@ -179,6 +162,7 @@ function addCustomer() {
         name: name,
         carName: car,
         whatsapp: phone,
+        currency: currency, // تخزين العملة
         totalDebt: total,
         paidTotal: paid,
         remaining: total - paid,
@@ -192,7 +176,7 @@ function addCustomer() {
         newCustomer.payments.push({
             id: Date.now() + 1,
             amount: paid,
-            note: "دفعة أولية",
+            note: "دفعة أولية عند التسجيل",
             date: new Date().toISOString()
         });
     }
@@ -200,10 +184,10 @@ function addCustomer() {
     if (!currentState.customers) currentState.customers = [];
     currentState.customers.push(newCustomer);
     
-    saveData(); // هذا سيقوم بتحديث السحابة، وبالتالي تحديث كل الأجهزة المتصلة
-    showToast("تمت الإضافة");
+    saveData();
+    showToast("تمت الإضافة بنجاح ✅");
     
-    // تنظيف الحقول
+    // تنظيف
     document.getElementById('cust-name').value = '';
     document.getElementById('cust-car').value = '';
     document.getElementById('cust-phone').value = '';
@@ -214,6 +198,7 @@ function addCustomer() {
     showPage('customers');
 }
 
+// --- عرض الزبائن ---
 function renderCustomers() {
     const list = document.getElementById('customers-list');
     const query = document.getElementById('search-customers').value.toLowerCase();
@@ -221,10 +206,12 @@ function renderCustomers() {
 
     if(!currentState.customers) currentState.customers = [];
 
-    const filtered = currentState.customers.filter(c => c.name.toLowerCase().includes(query) || c.carName.toLowerCase().includes(query));
+    // الترتيب: الأحدث أولاً
+    const sorted = [...currentState.customers].reverse();
+    const filtered = sorted.filter(c => c.name.toLowerCase().includes(query) || c.carName.toLowerCase().includes(query));
 
     if(filtered.length === 0) {
-        list.innerHTML = '<div style="text-align:center; padding:20px; color:#888;">لا يوجد زبائن</div>';
+        list.innerHTML = '<div style="text-align:center; padding:30px; color:#64748b;">لا توجد بيانات مطابقة</div>';
         return;
     }
 
@@ -236,18 +223,19 @@ function renderCustomers() {
         item.innerHTML = `
             <div class="item-info">
                 <h4>${c.name}</h4>
-                <small>🚗 ${c.carName}</small>
-                <small>📱 ${c.whatsapp}</small>
+                <small><i class="fas fa-car"></i> ${c.carName}</small>
+                <small><i class="fab fa-whatsapp"></i> ${c.whatsapp}</small>
             </div>
             <div class="price-tag">
-                ${formatMoney(c.remaining)}<br>
-                <span style="font-size:0.7em; color:#999">باقي</span>
+                ${formatMoney(c.remaining, c.currency)}<br>
+                <span>متبقي</span>
             </div>
         `;
         list.appendChild(item);
     });
 }
 
+// --- تفاصيل الزبون ---
 function loadCustomerDetails(id) {
     const customer = currentState.customers.find(c => c.id === id);
     if (!customer) return;
@@ -256,23 +244,21 @@ function loadCustomerDetails(id) {
     const container = document.getElementById('details-container');
     const payments = customer.payments || [];
 
+    // دعم العملات القديمة التي لا تملك حقل currency
+    const curr = customer.currency || 'IQD';
+
     container.innerHTML = `
         <h2>${customer.name}</h2>
-        <p><strong>السيارة:</strong> ${customer.carName}</p>
-        <p><strong>الهاتف:</strong> <a href="https://wa.me/${customer.whatsapp.replace('+','')}" target="_blank">${customer.whatsapp}</a></p>
-        <hr style="margin: 10px 0; border: 0; border-top: 1px dashed #ddd;">
-        <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-            <span>المبلغ الكلي:</span> <strong>${formatMoney(customer.totalDebt)}</strong>
-        </div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:5px; color:var(--success)">
-            <span>مجموع الواصل:</span> <strong>${formatMoney(customer.paidTotal)}</strong>
-        </div>
-        <div style="display:flex; justify-content:space-between; font-size:1.2rem; color:var(--danger)">
-            <span>الباقي:</span> <strong>${formatMoney(customer.remaining)}</strong>
-        </div>
-        <p style="margin-top:10px; font-size:0.9rem; color:#666">
-            <strong>تم التدقيق:</strong> ${customer.checkedBy || '-'} <br>
-            <strong>ملاحظات:</strong> ${customer.notes || '-'}
+        <div class="details-row"><strong>السيارة:</strong> <span>${customer.carName}</span></div>
+        <div class="details-row"><strong>الهاتف:</strong> <a href="https://wa.me/${customer.whatsapp.replace('+','')}" style="color:var(--primary)">${customer.whatsapp}</a></div>
+        <br>
+        <div class="details-row"><span>أصل الدين:</span> <strong>${formatMoney(customer.totalDebt, curr)}</strong></div>
+        <div class="details-row"><span>مجموع واصل:</span> <strong class="highlight-val">${formatMoney(customer.paidTotal, curr)}</strong></div>
+        <div class="details-row"><span>الباقي بذمته:</span> <strong class="danger-val">${formatMoney(customer.remaining, curr)}</strong></div>
+        <br>
+        <p style="font-size:0.9rem; color:#94a3b8; background:#0f172a; padding:10px; border-radius:8px;">
+            <strong>📝 ملاحظات:</strong> ${customer.notes || 'لا يوجد'}<br>
+            <strong>👤 المدقق:</strong> ${customer.checkedBy || '-'}
         </p>
     `;
 
@@ -282,15 +268,15 @@ function loadCustomerDetails(id) {
     [...payments].reverse().forEach(p => {
         const row = document.createElement('div');
         row.className = 'list-item';
-        row.style.background = '#f1f5f9';
+        row.style.cursor = 'default';
         row.innerHTML = `
             <div>
-                <strong>${formatMoney(p.amount)}</strong>
-                <div style="font-size:0.8rem; color:#666">${p.note}</div>
+                <strong style="color:var(--primary)">${formatMoney(p.amount, curr)}</strong>
+                <div style="font-size:0.8rem; color:#94a3b8">${p.note}</div>
             </div>
-            <div style="font-size:0.8rem; text-align:left">
+            <div style="font-size:0.75rem; text-align:left; color:#64748b">
                 ${new Date(p.date).toLocaleDateString('ar-IQ')}<br>
-                ${new Date(p.date).toLocaleTimeString('ar-IQ', {hour: '2-digit', minute:'2-digit'})}
+                ${new Date(p.date).toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit'})}
             </div>
         `;
         transList.appendChild(row);
@@ -299,6 +285,7 @@ function loadCustomerDetails(id) {
     showPage('details');
 }
 
+// --- قسم التسديد ---
 function renderPaymentClients() {
     const list = document.getElementById('payment-clients-list');
     const query = document.getElementById('search-payment-client').value.toLowerCase();
@@ -312,26 +299,31 @@ function renderPaymentClients() {
         const item = document.createElement('div');
         item.className = 'list-item debt';
         item.onclick = () => openPaymentModal(c.id);
+        const curr = c.currency || 'IQD';
         item.innerHTML = `
             <div class="item-info">
                 <h4>${c.name}</h4>
                 <small>${c.carName}</small>
             </div>
-            <div class="price-tag">${formatMoney(c.remaining)}</div>
+            <div class="price-tag">${formatMoney(c.remaining, curr)}</div>
         `;
         list.appendChild(item);
     });
 }
 
-let selectedCustomerIdForPay = null;
-
 function openPaymentModal(id) {
     selectedCustomerIdForPay = id;
     const c = currentState.customers.find(x => x.id === id);
-    document.getElementById('pay-modal-info').innerHTML = `الزبون: <b>${c.name}</b><br>الباقي: ${formatMoney(c.remaining)}`;
+    const curr = c.currency || 'IQD';
+    
+    document.getElementById('pay-modal-info').innerHTML = `
+        الزبون: <b style="color:white">${c.name}</b><br>
+        الباقي الحالي: <span style="color:var(--danger)">${formatMoney(c.remaining, curr)}</span>
+    `;
     document.getElementById('payment-form-modal').classList.remove('hidden');
     document.getElementById('pay-amount').value = '';
     document.getElementById('pay-note').value = '';
+    document.getElementById('pay-amount').focus();
 }
 
 function closePaymentModal() {
@@ -354,27 +346,50 @@ function submitPayment() {
     const c = currentState.customers[cIndex];
     c.paidTotal += amount;
     c.remaining = c.totalDebt - c.paidTotal;
-    if(!c.payments) c.payments = [];
     
+    if(!c.payments) c.payments = [];
     c.payments.push({
         id: Date.now(),
         amount: amount,
-        note: note || "تسديد اعتيادي",
+        note: note || "تسديد نقدي",
         date: new Date().toISOString()
     });
 
     saveData();
     closePaymentModal();
-    showToast("تم التسديد بنجاح");
+    showToast("تم التسديد بنجاح 💰");
+    
+    // تحديث القائمة المفتوحة
+    renderPaymentClients(); 
 }
 
 function deleteCustomerConfirm() {
     if(!currentCustomerViewId) return;
-    if(confirm("هل أنت متأكد من حذف هذا الزبون وجميع سجلاته؟")) {
+    if(confirm("هل أنت متأكد من حذف هذا السجل؟ لا يمكن التراجع!")) {
         currentState.customers = currentState.customers.filter(c => c.id !== currentCustomerViewId);
         saveData();
-        showToast("تم الحذف");
+        showToast("تم الحذف 🗑️");
         showPage('customers');
+    }
+}
+
+// --- التنسيق المالي (يدعم الدولار والدينار) ---
+function formatMoney(amount, currency = 'IQD') {
+    if (currency === 'USD') {
+        // دولار: يظهر الرمز $ وكسور عشرية
+        return new Intl.NumberFormat('en-US', { 
+            style: 'currency', 
+            currency: 'USD',
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 2
+        }).format(amount);
+    } else {
+        // دينار: يظهر د.ع وبدون كسور
+        return new Intl.NumberFormat('ar-IQ', { 
+            style: 'currency', 
+            currency: 'IQD', 
+            maximumFractionDigits: 0 
+        }).format(amount);
     }
 }
 
@@ -389,18 +404,20 @@ function openPrintModal() {
 function executePrint() {
     const officeName = document.getElementById('print-office-input').value;
     const note = document.getElementById('print-note-input').value;
-    const c = currentState.customers.find(x => x.id === currentCustomerViewId);
     
-    localStorage.setItem('office_name_pref', officeName);
+    if(officeName) localStorage.setItem('office_name_pref', officeName);
+
+    const c = currentState.customers.find(x => x.id === currentCustomerViewId);
+    const payments = c.payments || [];
+    const curr = c.currency || 'IQD';
 
     const printArea = document.getElementById('print-area');
-    const payments = c.payments || [];
-
+    
     let tableRows = '';
     [...payments].reverse().forEach(p => {
         tableRows += `
             <tr>
-                <td>${formatMoney(p.amount)}</td>
+                <td style="direction:ltr">${formatMoney(p.amount, curr)}</td>
                 <td>${p.note}</td>
                 <td style="direction:ltr">${new Date(p.date).toLocaleDateString('en-GB')}</td>
             </tr>
@@ -409,52 +426,48 @@ function executePrint() {
 
     printArea.innerHTML = `
         <div class="invoice-header">
-            <div class="invoice-title">${officeName || 'نظام ديون السيارات'}</div>
-            <div class="invoice-date">تاريخ الطباعة: ${new Date().toLocaleString('ar-IQ')}</div>
+            <h2>${officeName || 'نظام إدارة الديون'}</h2>
+            <p>تاريخ الطباعة: ${new Date().toLocaleString('ar-IQ')}</p>
         </div>
 
         <div class="info-grid">
-            <div class="info-item">
-                <div class="info-label">اسم الزبون</div>
-                <div class="info-value">${c.name}</div>
+            <div>
+                <strong>الزبون:</strong> ${c.name} <br>
+                <strong>الهاتف:</strong> ${c.whatsapp}
             </div>
-            <div class="info-item">
-                <div class="info-label">نوع السيارة</div>
-                <div class="info-value">${c.carName}</div>
-            </div>
-            <div class="info-item">
-                <div class="info-label">رقم الهاتف</div>
-                <div class="info-value">${c.whatsapp}</div>
-            </div>
-            <div class="info-item">
-                <div class="info-label">رقم القائمة</div>
-                <div class="info-value">#${c.id.toString().slice(-6)}</div>
+            <div>
+                <strong>السيارة:</strong> ${c.carName} <br>
+                <strong>رقم القائمة:</strong> #${c.id.toString().slice(-6)}
             </div>
         </div>
 
         <div class="summary-box">
-            <div class="summary-row"><span>المبلغ الكلي للدين:</span> <strong>${formatMoney(c.totalDebt)}</strong></div>
-            <div class="summary-row"><span>مجموع المبالغ الواصلة:</span> <strong style="color:var(--success)">${formatMoney(c.paidTotal)}</strong></div>
-            <div class="summary-row"><span>المبلغ المتبقي بذمته:</span> <span class="summary-total">${formatMoney(c.remaining)}</span></div>
+            <div style="display:flex; justify-content:space-between">
+                <span>المبلغ الكلي:</span> <strong>${formatMoney(c.totalDebt, curr)}</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-top:5px">
+                <span>الواصل:</span> <strong>${formatMoney(c.paidTotal, curr)}</strong>
+            </div>
+            <hr>
+            <div style="display:flex; justify-content:space-between; font-size:1.2em">
+                <span>الباقي:</span> <strong>${formatMoney(c.remaining, curr)}</strong>
+            </div>
         </div>
 
-        <h3 style="margin-right:20px; color:#1e3a8a">سجل الدفعات</h3>
+        <h3>سجل الدفعات</h3>
         <table class="print-table">
             <thead>
                 <tr>
                     <th>المبلغ</th>
-                    <th>الملاحظة</th>
+                    <th>التفاصيل</th>
                     <th>التاريخ</th>
                 </tr>
             </thead>
-            <tbody>
-                ${tableRows}
-            </tbody>
+            <tbody>${tableRows}</tbody>
         </table>
 
-        <div class="print-footer">
+        <div style="margin-top:40px; text-align:center; border-top:1px solid #ccc; padding-top:10px;">
             <p>${note}</p>
-            <p style="margin-top:20px; font-weight:bold">-- توقيع الإدارة --</p>
         </div>
     `;
 
@@ -462,20 +475,45 @@ function executePrint() {
     window.print();
 }
 
-function formatMoney(amount) {
-    return new Intl.NumberFormat('ar-IQ', { style: 'currency', currency: 'IQD', maximumFractionDigits: 0 }).format(amount);
-}
-
+// --- أدوات النظام ---
 function forceSync() {
     if(navigator.onLine) {
-        saveData(); // يجبر الرفع
+        saveData();
         showToast("جاري المزامنة...");
     } else {
-        alert("لا يوجد اتصال بالإنترنت");
+        alert("لا يوجد إنترنت");
     }
 }
 
-// --- ربط الدوال ---
+window.exportData = function() {
+    const dataStr = JSON.stringify(currentState);
+    const link = document.createElement('a');
+    link.href = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+    link.download = `backup_${new Date().toISOString().slice(0,10)}.json`;
+    link.click();
+};
+
+window.importData = function(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = JSON.parse(e.target.result);
+            if(data.customers) {
+                currentState = data;
+                saveData();
+                alert("تم استعادة البيانات بنجاح");
+                location.reload();
+            } else {
+                alert("ملف غير صالح");
+            }
+        } catch(err) { alert("خطأ في الملف"); }
+    };
+    reader.readAsText(file);
+};
+
+// ربط الدوال بالـ Window
 window.fingerprintAction = fingerprintAction;
 window.checkPin = checkPin;
 window.logout = logout;
@@ -491,23 +529,3 @@ window.deleteCustomerConfirm = deleteCustomerConfirm;
 window.openPrintModal = openPrintModal;
 window.executePrint = executePrint;
 window.forceSync = forceSync;
-window.exportData = function() {
-    const dataStr = JSON.stringify(currentState);
-    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
-    const linkElement = document.createElement('a');
-    linkElement.setAttribute('href', dataUri);
-    linkElement.setAttribute('download', 'backup.json');
-    linkElement.click();
-};
-window.importData = function(input) {
-    const file = input.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = function(e) {
-        currentState = JSON.parse(e.target.result);
-        saveData();
-        alert("تم استعادة البيانات");
-        location.reload();
-    };
-    reader.readAsText(file);
-};
