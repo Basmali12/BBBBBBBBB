@@ -1,4 +1,4 @@
-const CACHE_NAME = 'debt-app-v2-dark';
+const CACHE_NAME = 'debt-app-v3-print-fix';
 const ASSETS_TO_CACHE = [
     './',
     './index.html',
