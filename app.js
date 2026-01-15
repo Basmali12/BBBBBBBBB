@@ -1,6 +1,6 @@
 // --- استيراد مكتبات Firebase ---
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
-import { getDatabase, ref, set, get, child } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js";
+import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js";
 
 // --- إعدادات Firebase ---
 const firebaseConfig = {
@@ -19,7 +19,7 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
 // --- إعدادات التطبيق ---
-const APP_PIN = "123321"; // تم التعديل
+const APP_PIN = "123321";
 const LOCAL_STORAGE_KEY = "car_debt_offline_data";
 
 let currentState = {
@@ -27,26 +27,61 @@ let currentState = {
     auditLog: []
 };
 let currentCustomerViewId = null;
+let isFirstLoad = true;
 
-// --- عند التشغيل (Logic Hybrid) ---
+// --- عند التشغيل ---
 document.addEventListener('DOMContentLoaded', () => {
-    // 1. تحميل البيانات المخزنة محلياً في الهاتف فوراً (يعمل بدون نت)
+    // 1. تحميل البيانات المخزنة محلياً أولاً (للسرعة)
     const localData = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (localData) {
         currentState = JSON.parse(localData);
-        console.log("تم تحميل البيانات المحلية");
+        updateUI(); // تحديث الواجهة بالبيانات المحلية فوراً
     }
 
-    // 2. التحقق من حالة الاتصال
+    // 2. تفعيل الاستماع لقاعدة البيانات (للمزامنة الفورية)
+    setupRealtimeListener();
+
+    // 3. مراقبة حالة الاتصال
     updateOnlineStatus();
     window.addEventListener('online', updateOnlineStatus);
     window.addEventListener('offline', updateOnlineStatus);
-
-    // 3. إذا كان متصل، حاول جلب أحدث نسخة من السحابة لدمجها (اختياري، هنا سنعتمد المحلي ثم نرفعه لضمان عدم الضياع)
-    if (navigator.onLine) {
-        syncFromCloud();
-    }
 });
+
+// --- وظيفة الاستماع المباشر (سر الحل) ---
+function setupRealtimeListener() {
+    const dbRef = ref(db, 'debt_system_data');
+    
+    // onValue تعمل كلما تغيرت البيانات في السيرفر
+    onValue(dbRef, (snapshot) => {
+        const data = snapshot.val();
+        
+        // إذا وجدت بيانات في السيرفر
+        if (data) {
+            currentState = data;
+            
+            // التأكد من وجود المصفوفات
+            if (!currentState.customers) currentState.customers = [];
+            if (!currentState.auditLog) currentState.auditLog = [];
+            
+            // تحديث التخزين المحلي ليكون مطابقاً للسيرفر
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(currentState));
+            
+            // تحديث الشاشة
+            console.log("تم استلام تحديث من السحابة ☁️");
+            updateUI();
+        }
+    }, (error) => {
+        console.error("خطأ في الاتصال بالقاعدة:", error);
+    });
+}
+
+function updateUI() {
+    // تحديث الصفحة المفتوحة حالياً فقط
+    const activePage = document.querySelector('.page.active');
+    if (activePage && activePage.id === 'page-customers') renderCustomers();
+    if (activePage && activePage.id === 'page-payments') renderPaymentClients();
+    if (activePage && activePage.id === 'page-details' && currentCustomerViewId) loadCustomerDetails(currentCustomerViewId);
+}
 
 function updateOnlineStatus() {
     const statusEl = document.getElementById('online-status');
@@ -55,8 +90,8 @@ function updateOnlineStatus() {
     if (navigator.onLine) {
         statusEl.className = 'status-indicator online';
         if(syncText) syncText.innerText = "✅ متصل بالإنترنت (المزامنة نشطة)";
-        // محاولة رفع البيانات المحلية عند عودة الاتصال
-        syncToCloud();
+        // عند عودة النت، نرفع النسخة المحلية إذا كانت أحدث (يمكن تطوير هذا الجزء لاحقاً)
+        // حالياً نعتمد على onValue لجلب البيانات
     } else {
         statusEl.className = 'status-indicator offline';
         if(syncText) syncText.innerText = "⚠️ وضع عدم الاتصال (الحفظ محلي فقط)";
@@ -75,15 +110,13 @@ function fingerprintAction() {
 function checkPin() {
     const input = document.getElementById('pin-input').value;
     if (input === APP_PIN) {
-        // إظهار رسالة الترحيب
         const welcome = document.getElementById('welcome-msg');
         welcome.classList.remove('hidden');
-        
-        // الانتظار ثانيتين ثم الدخول
         setTimeout(() => {
             welcome.classList.add('hidden');
             document.getElementById('login-screen').classList.add('hidden');
-        }, 2000);
+            updateUI(); // تحديث الواجهة بعد الدخول
+        }, 1500);
     } else {
         document.getElementById('login-error').innerText = "رمز خطأ!";
     }
@@ -103,47 +136,20 @@ function showPage(pageId) {
     const navLink = document.querySelector(`.nav-item[onclick*="'${pageId}'"]`);
     if(navLink) navLink.classList.add('active');
 
-    if (pageId === 'customers') renderCustomers();
-    if (pageId === 'payments') renderPaymentClients();
+    updateUI();
 }
 
-// --- إدارة البيانات (Hybrid Save) ---
+// --- الحفظ ---
 function saveData() {
-    // 1. الحفظ المحلي (دائماً)
+    // 1. حفظ محلي
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(currentState));
     
-    // 2. الحفظ السحابي (إذا توفر نت)
+    // 2. حفظ سحابي
     if (navigator.onLine) {
-        syncToCloud();
+        set(ref(db, 'debt_system_data'), currentState)
+            .then(() => console.log("تم الرفع للسحابة"))
+            .catch((err) => console.error("فشل الرفع", err));
     }
-}
-
-function syncToCloud() {
-    set(ref(db, 'debt_system_data'), currentState)
-        .then(() => {
-            console.log("تمت المزامنة مع السحابة");
-        })
-        .catch((err) => console.error("فشل المزامنة", err));
-}
-
-function syncFromCloud() {
-    get(child(ref(db), 'debt_system_data')).then((snapshot) => {
-        if (snapshot.exists()) {
-            const cloudData = snapshot.val();
-            // منطق بسيط: إذا كانت البيانات السحابية موجودة، نستخدمها
-            // يمكنك تعقيد المنطق للمقارنة، لكن هنا سنعتمد السحابة كمرجع إذا وجد
-            if (!currentState.customers || currentState.customers.length === 0) {
-                 currentState = cloudData;
-                 if(!currentState.customers) currentState.customers = [];
-                 localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(currentState));
-                 console.log("تم استرجاع البيانات من السحابة");
-                 // تحديث الواجهة إذا لزم
-                 renderCustomers();
-            }
-        }
-    }).catch((error) => {
-        console.error(error);
-    });
 }
 
 function showToast(msg) {
@@ -153,7 +159,7 @@ function showToast(msg) {
     setTimeout(() => { x.className = x.className.replace("show", ""); }, 3000);
 }
 
-// --- العمليات (إضافة، عرض، تسديد) ---
+// --- العمليات ---
 function addCustomer() {
     const name = document.getElementById('cust-name').value;
     const car = document.getElementById('cust-car').value;
@@ -191,11 +197,13 @@ function addCustomer() {
         });
     }
 
+    if (!currentState.customers) currentState.customers = [];
     currentState.customers.push(newCustomer);
-    saveData();
-    showToast("تمت الإضافة بنجاح");
     
-    // تنظيف
+    saveData(); // هذا سيقوم بتحديث السحابة، وبالتالي تحديث كل الأجهزة المتصلة
+    showToast("تمت الإضافة");
+    
+    // تنظيف الحقول
     document.getElementById('cust-name').value = '';
     document.getElementById('cust-car').value = '';
     document.getElementById('cust-phone').value = '';
@@ -214,6 +222,11 @@ function renderCustomers() {
     if(!currentState.customers) currentState.customers = [];
 
     const filtered = currentState.customers.filter(c => c.name.toLowerCase().includes(query) || c.carName.toLowerCase().includes(query));
+
+    if(filtered.length === 0) {
+        list.innerHTML = '<div style="text-align:center; padding:20px; color:#888;">لا يوجد زبائن</div>';
+        return;
+    }
 
     filtered.forEach(c => {
         const item = document.createElement('div');
@@ -353,13 +366,11 @@ function submitPayment() {
     saveData();
     closePaymentModal();
     showToast("تم التسديد بنجاح");
-    if(currentCustomerViewId === selectedCustomerIdForPay) loadCustomerDetails(selectedCustomerIdForPay);
-    renderPaymentClients();
 }
 
 function deleteCustomerConfirm() {
     if(!currentCustomerViewId) return;
-    if(confirm("هل أنت متأكد من حذف هذا الزبون وجميع سجلاته؟ لا يمكن التراجع!")) {
+    if(confirm("هل أنت متأكد من حذف هذا الزبون وجميع سجلاته؟")) {
         currentState.customers = currentState.customers.filter(c => c.id !== currentCustomerViewId);
         saveData();
         showToast("تم الحذف");
@@ -367,11 +378,10 @@ function deleteCustomerConfirm() {
     }
 }
 
-// --- الطباعة (التصميم الجديد) ---
+// --- الطباعة ---
 function openPrintModal() {
     if(!currentCustomerViewId) return;
     document.getElementById('print-modal').classList.remove('hidden');
-    // استرجاع اسم المكتب المحفوظ سابقاً
     const savedOffice = localStorage.getItem('office_name_pref') || '';
     document.getElementById('print-office-input').value = savedOffice;
 }
@@ -381,7 +391,6 @@ function executePrint() {
     const note = document.getElementById('print-note-input').value;
     const c = currentState.customers.find(x => x.id === currentCustomerViewId);
     
-    // حفظ اسم المكتب للمرة القادمة
     localStorage.setItem('office_name_pref', officeName);
 
     const printArea = document.getElementById('print-area');
@@ -459,14 +468,14 @@ function formatMoney(amount) {
 
 function forceSync() {
     if(navigator.onLine) {
-        syncToCloud();
+        saveData(); // يجبر الرفع
         showToast("جاري المزامنة...");
     } else {
         alert("لا يوجد اتصال بالإنترنت");
     }
 }
 
-// --- ربط الدوال بـ Window ---
+// --- ربط الدوال ---
 window.fingerprintAction = fingerprintAction;
 window.checkPin = checkPin;
 window.logout = logout;
